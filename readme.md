@@ -1,7 +1,7 @@
 <h1 align="center">
   <br>
   <a>
-  <img src="assets/hookshot.png" alt="Hookshot" width="200">
+  <img src="assets/clawshot.png" alt="ClawShot" width="200">
 </a>
 
   <br>
