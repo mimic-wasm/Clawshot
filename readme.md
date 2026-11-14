@@ -5,7 +5,7 @@
 </a>
 
   <br>
-  <b>Hookshot</b>
+  <b>ClawShot</b>
   <br>
 </h1>
 
