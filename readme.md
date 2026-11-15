@@ -25,7 +25,7 @@
   <a href="#license">License</a>
 </p>
 
-Clawshot is a static recomp. The game's code is translated to C and compiled into a Windows or Linux program,
+Clawshot is a static recompilation. The game's code is translated to C and compiled into a Windows or Linux program,
 the console's system software is reimplemented, and the Switch 2 graphics are rebuilt on Vulkan. All of this happens
 **on your PC, from your own copy of the game**.
 <br>
