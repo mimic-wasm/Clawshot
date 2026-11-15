@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define MKWVK_API_VERSION 22
+#define MKWVK_API_VERSION 23
 enum { HOS_OPT_CHEAT_HEARTS = 32, HOS_OPT_CHEAT_FLIGHT, HOS_OPT_CHEAT_ACTION, HOS_OPT_CHEAT_CAMERA, HOS_OPT_CHEAT_SPEED };
 /* (hookshot) the Gameplay tab's Text size (host/oot_text_size.c): 0 the game's, 1 110%, 2 125%, 3 150%, 4 175% */
 enum { HOS_OPT_TEXT_SIZE = 10 };
@@ -103,6 +103,41 @@ typedef struct MkwVkSetting {
     int value, lo, hi, step;
     int restart, fixed;   /* the change applies at the next start; nothing to choose on this PC (the menu shows it greyed) */
 } MkwVkSetting;
+
+/* (version 23, hookshot) Co-op (host/coop.c; the Insert menu's Co-op page, gpu/vk/vk_menu.cpp). The menu sends commands and reads
+   the status; the host holds the session. The key is never given back: only whether one is set */
+#define MKWVK_COOP_PLAYERS 8
+enum { MKWVK_COOP_IDLE, MKWVK_COOP_HOSTING, MKWVK_COOP_JOINING, MKWVK_COOP_JOINED };            /* (MkwVkCoopStatus.mode) */
+enum { MKWVK_COOP_VOICE_OFF, MKWVK_COOP_VOICE_ACTIVITY, MKWVK_COOP_VOICE_PUSH };                  /* (the Voice chat row) */
+/* the commands (MkwVkHost.coop_command's, with the text or value each takes): the player's name, the key, whether a key is used
+   (value 0 or 1), the address to join (host or host:port), the voice mode (value), then Host, Join, Start (the host's: nobody
+   can join after it) and Leave (stops hosting, or leaves) */
+enum { MKWVK_COOP_NAME, MKWVK_COOP_KEY, MKWVK_COOP_KEY_ON, MKWVK_COOP_ADDRESS, MKWVK_COOP_VOICE, MKWVK_COOP_HOST,
+       MKWVK_COOP_JOIN, MKWVK_COOP_START, MKWVK_COOP_LEAVE };
+typedef struct MkwVkCoopPlayer {
+    char name[24], map[24];
+    uint8_t host, self, speaking, in_world;
+} MkwVkCoopPlayer;
+typedef struct MkwVkCoopStatus {
+    int32_t mode;        /* MKWVK_COOP_* */
+    int32_t started;     /* the host started the session: nobody new can join */
+    int32_t count;       /* the players listed */
+    int32_t key_on, key_set, needs_key;   /* the Key row's choice; a key is typed; the session joined asks for one */
+    int32_t voice;       /* MKWVK_COOP_VOICE_* */
+    int32_t speaking;    /* this player's microphone is sending now */
+    int32_t port;
+    char message[112];   /* what to tell the player (the last error too, after it ended) */
+    char name[24];       /* this player's */
+    char address[64];    /* the address typed to join */
+    char lobby_address[64];   /* hosting: the address to give to friends */
+    MkwVkCoopPlayer players[MKWVK_COOP_PLAYERS];
+} MkwVkCoopStatus;
+/* a player in the picture: x and y 0 to 1 across and down it (off the picture: on its edge, offscreen 1), the distance in metres */
+typedef struct MkwVkCoopMark {
+    char name[24];
+    float x, y, distance;
+    uint8_t speaking, offscreen;
+} MkwVkCoopMark;
 
 /* what the executable gives the back end */
 typedef struct MkwVkHost {
@@ -201,6 +236,12 @@ typedef struct MkwVkHost {
        while the game draws it in the middle 16:9 with the menus (wide_menus's keep_mask) and so leaves the sides open
        (host/hos_main.c hos_wide_cover); 0 when it covers the whole picture itself. Asked at each present */
     float (*wide_cover)(void);
+    /* (version 23, hookshot) Co-op (host/coop.c): a command of the Co-op page (MKWVK_COOP_*; text or value as that command takes
+       it; 1 when taken), the session's status, and the other players' places in the picture (aspect: the picture's width over
+       its height; the count, at most max) */
+    int (*coop_command)(int command, const char *text, int value);
+    void (*coop_status)(MkwVkCoopStatus *out);
+    int (*coop_marks)(MkwVkCoopMark *out, int max, float aspect);
 } MkwVkHost;
 
 /* One completed temporal-upscale sample; all zero while inactive. */

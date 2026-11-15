@@ -1418,6 +1418,11 @@ Row rows[] = {
     {TAB_DEBUG, "ASTC as RGBA8", &opts.astc_rgba8, 0, 1, 1, tx_onoff,
      "Big ASTC textures kept as decoded RGBA8 instead of re-encoded to BC3: a workaround for texture artifacts seen on some AMD "
      "cards (issues 57 and 1006). Takes far more video memory. Applies after restart.", hn_astc_rgba8, true, true},
+    // (hookshot) the Gameplay tab's Co-op: Enter opens its page (host/coop.c): host a session or join one, a key or none, voice chat
+    {TAB_GAMEPLAY, "Co-op", nullptr, 0, 0, 0, nullptr,
+     "Play with friends. Host a session and give them its address, or join one by the host's address (with its key, if it has "
+     "one). When the host presses Start nobody new can join. Then you see each other's names over the picture, and proximity "
+     "chat carries your microphones: you hear those near you on the same map, louder the closer they are."},
     // (hookshot) the Gameplay tab's Bug report (vk_bug_report.h): A or Enter writes the report's folder; the help says what is in it
     {TAB_GAMEPLAY, "Bug report", nullptr, 0, 0, 0, nullptr,
      "Saves what an issue needs in a new folder, bug-reports in the game folder: report.txt with the issue form's answers (this "
@@ -2005,6 +2010,7 @@ void share_finish() {
     share_busy.store(false);
     menu_refresh = true;
 }
+bool is_coop_row(const Row& r) { return !r.value && r.tab == TAB_GAMEPLAY && !strcmp(r.name, "Co-op"); }
 bool is_share_row(const Row& r) { return !r.value && r.tab == TAB_DEBUG && !strcmp(r.name, "Save my pipeline list"); }
 std::string game_folder() {
     char exe[MAX_PATH];
@@ -3644,6 +3650,254 @@ void draw_teleport(ui::Ctx& c) {
     ui::prompt_bar(c, prompts, 5);   // (the prompts, on top of the help and the cards)
 }
 
+// ---- (hookshot) the Co-op page (page 6): host/coop.c holds the session; this is its menu ----
+enum CoopItemKind { CI_TEXT, CI_CHOICE, CI_BUTTON, CI_INFO };
+struct CoopItem {
+    CoopItemKind kind;
+    int id;               // (MKWVK_COOP_* of the command it sets or sends)
+    std::string label, value;
+    bool enabled;
+};
+int coop_sel = 0;
+int coop_edit = -1;         // (the item being typed into, or -1)
+std::string coop_buffer;
+bool coop_can() { return host && host->coop_command && host->coop_status; }
+const char* coop_voice_text(int v) {
+    static const char* t[] = {"Off", "Voice activity", "Push to talk (V)"};
+    return t[std::clamp(v, 0, 2)];
+}
+/// What the page shows for this status: the lines and the buttons, in order
+std::vector<CoopItem> coop_items(const MkwVkCoopStatus& st) {
+    std::vector<CoopItem> v;
+    const std::string stars(std::string(st.key_set ? "(a key is set)" : "(none typed)"));
+    if (st.mode == MKWVK_COOP_IDLE) {
+        v.push_back({CI_TEXT, MKWVK_COOP_NAME, "Your name", st.name, true});
+        v.push_back({CI_CHOICE, MKWVK_COOP_KEY_ON, "Use a key", st.key_on ? "On" : "Off (anyone with the address can join)", true});
+        if (st.key_on) v.push_back({CI_TEXT, MKWVK_COOP_KEY, "Key", stars, true});
+        v.push_back({CI_TEXT, MKWVK_COOP_ADDRESS, "Address to join", st.address[0] ? st.address : "(host or host:port)", true});
+        v.push_back({CI_BUTTON, MKWVK_COOP_HOST, "Host", "Open a session others can join", true});
+        v.push_back({CI_BUTTON, MKWVK_COOP_JOIN, "Join", "Join the host at the address", st.address[0] != 0});
+    } else {
+        if (st.mode == MKWVK_COOP_HOSTING) {
+            v.push_back({CI_INFO, 0, "Give friends this address", st.lobby_address, true});
+            v.push_back({CI_INFO, 0, "Key", st.key_on ? "required" : "none", true});
+            v.push_back({CI_BUTTON, MKWVK_COOP_START, st.started ? "Started" : "Start",
+                         st.started ? "Closed to new players" : "Begin: nobody new can join after this", !st.started});
+        }
+        for (int i = 0; i < st.count; i++) {
+            const MkwVkCoopPlayer& p = st.players[i];
+            std::string who = p.name;
+            if (p.host) who += " (host)";
+            if (p.self) who += " (you)";
+            std::string where = !st.started ? "" : p.in_world ? p.map : "not in a world";
+            if (p.speaking) where += where.empty() ? "talking" : ", talking";
+            v.push_back({CI_INFO, 0, "Player", who + (where.empty() ? "" : "  -  " + where), true});
+        }
+    }
+    v.push_back({CI_CHOICE, MKWVK_COOP_VOICE, "Voice chat", coop_voice_text(st.voice), true});
+    if (st.mode != MKWVK_COOP_IDLE)
+        v.push_back({CI_BUTTON, MKWVK_COOP_LEAVE, st.mode == MKWVK_COOP_HOSTING ? "Stop hosting" : st.mode == MKWVK_COOP_JOINING ? "Cancel" : "Leave",
+                     "", true});
+    return v;
+}
+bool coop_selectable(const CoopItem& i) { return i.kind != CI_INFO && i.enabled; }
+void draw_coop(ui::Ctx& c) {
+    const float s = c.s;
+    MkwVkCoopStatus st{};
+    if (coop_can()) host->coop_status(&st);
+    const auto items = coop_items(st);
+    const char* head = st.mode == MKWVK_COOP_HOSTING ? (st.started ? "Hosting - started" : "Hosting - lobby")
+                       : st.mode == MKWVK_COOP_JOINED ? (st.started ? "Joined - started" : "Joined - lobby") : st.mode == MKWVK_COOP_JOINING ? "Joining" : "Not in a session";
+    const float hh = title_banner(c, "Co-op", head);
+    float cx0, cx1, hx0, hx1;
+    bool narrow;
+    columns(c, &cx0, &cx1, &hx0, &hx1, &narrow);
+    column(c, cx0, cx1, hh);
+    const bool editing = coop_edit >= 0;
+    const ui::Prompt browse[] = {{ui::kUpDown, "Move"}, {ui::kLeftRight, "Change"}, {ui::kConfirm, "Select"}, {ui::kBack, "Back"}};
+    const ui::Prompt typing[] = {{ui::kConfirm, "Done"}, {ui::kBack, "Cancel"}};
+    if (editing) ui::prompt_bar(c, typing, 2); else ui::prompt_bar(c, browse, 4);
+    const float left = cx0 + 24 * s, right = cx1 - 24 * s;
+    float y = hh + 20 * s;
+    const float pitch = 44 * s;
+    if (st.message[0]) {
+        y += ui::para(c, c.f.body, 16 * s, ImVec2(left, y), ui::kAccent, st.message, right - left) + 14 * s;
+    }
+    for (int i = 0; i < (int)items.size(); i++) {
+        const CoopItem& it = items[i];
+        const ImVec2 a(left, y), b(right, y + pitch - 6 * s);
+        const bool sel = i == coop_sel && coop_selectable(it);
+        const bool edit = editing && i == coop_edit;
+        c.d->AddRectFilled(a, b, sel ? ui::kCellNameSel : ui::kCellName, 3 * s);
+        c.d->AddRect(a, b, ui::kEdge, 3 * s, std::max(1.0f, s));
+        if (sel) c.d->AddRectFilled(a, ImVec2(a.x + 4 * s, b.y), ui::kGoldHi);
+        const ImU32 ink = it.enabled ? (sel ? ui::kInkBright : ui::kInk) : ui::kDim;
+        ui::text_mid(c, sel ? c.f.strong : c.f.body, 17 * s, a.x + 16 * s, (a.y + b.y) * 0.5f, ink, it.label.c_str());
+        std::string value = it.value;
+        if (edit) value = (it.id == MKWVK_COOP_KEY ? coop_buffer : coop_buffer) + "_";
+        if (!value.empty() && it.kind != CI_BUTTON) {
+            const float w = ui::size_of(c.f.body, 16 * s, value.c_str()).x;
+            c.d->PushClipRect(ImVec2(a.x + 220 * s, a.y), b, true);
+            ui::text_mid(c, c.f.body, 16 * s, std::max(a.x + 230 * s, b.x - 16 * s - w), (a.y + b.y) * 0.5f, edit ? ui::kGoldHi : ui::kSoft, value.c_str());
+            c.d->PopClipRect();
+        } else if (!value.empty()) {
+            ui::text_mid(c, c.f.body, 15 * s, a.x + 220 * s, (a.y + b.y) * 0.5f, ui::kDim, value.c_str());
+        }
+        if (coop_selectable(it)) hits.add(a.x, a.y, b.x, b.y, menu_hit::kListLine, i);
+        y += pitch;
+    }
+    if (!narrow)
+        help_box(c, hx0, hx1, std::max(hh + 26 * s, c.h * .30f), "Co-op",
+                 "Host opens a session on UDP port 7770 (HOS_COOP_PORT changes it): friends on your network or VPN join by your "
+                 "address; over the internet the port must be forwarded on your router. Type with the keyboard, Ctrl+V pastes "
+                 "(Windows). The key is a shared password, never saved. Voice: push to talk is the V key (HOS_COOP_PTT_VK).",
+                 nullptr, nullptr, 0, false, hh + 18 * s, c.h * 0.9f);
+}
+#ifdef _WIN32
+std::string coop_clipboard() {
+    std::string out;
+    if (!OpenClipboard(nullptr)) return out;
+    if (HANDLE h = GetClipboardData(CF_UNICODETEXT)) {
+        if (const wchar_t* w = (const wchar_t*)GlobalLock(h)) {
+            for (; *w && out.size() < 80; w++)
+                if (*w >= 32 && *w < 127) out += (char)*w;
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    return out;
+}
+#else
+std::string coop_clipboard() { return {}; }   // (Linux: type it; no clipboard read without a desktop library)
+#endif
+/// The characters typed since the last call, from the keys' states (edges), into coop_buffer. Returns 1 Enter, -1 Esc, 0 neither
+int coop_type(bool mine) {
+    static bool held[256];
+    static int64_t repeat_at = 0;
+    int result = 0;
+    const bool shift = mine && (GetAsyncKeyState(VK_SHIFT) & 0x8000), ctrl = mine && (GetAsyncKeyState(VK_CONTROL) & 0x8000);
+    const int64_t now = prof_now();
+    for (int k = 8; k < 256; k++) {
+        const bool down = mine && (GetAsyncKeyState(k) & 0x8000) != 0;
+        bool fire = down && !held[k];
+        if (down && held[k] && k == VK_BACK && now > repeat_at) fire = true, repeat_at = now + 50000000LL;
+        if (fire && !held[k]) repeat_at = now + 400000000LL;
+        held[k] = down;
+        if (!fire) continue;
+        char ch = 0;
+        if (k >= 'A' && k <= 'Z') {
+            if (ctrl && k == 'V') { coop_buffer += coop_clipboard(); continue; }
+            ch = shift ? (char)k : (char)(k + 32);
+        } else if (k >= '0' && k <= '9') ch = shift ? 0 : (char)k;
+        else if (k >= 0x60 && k <= 0x69) ch = (char)('0' + k - 0x60);
+        else if (k == VK_OEM_PERIOD) ch = '.';
+        else if (k == VK_OEM_MINUS) ch = shift ? '_' : '-';
+        else if (k == VK_OEM_1) ch = shift ? ':' : 0;
+        else if (k == VK_SPACE) ch = ' ';
+        else if (k == VK_BACK) { if (!coop_buffer.empty()) coop_buffer.pop_back(); }
+        else if (k == VK_DELETE) coop_buffer.clear();
+        else if (k == VK_RETURN) result = 1;
+        else if (k == VK_ESCAPE) result = -1;
+        if (ch && coop_buffer.size() < 47) coop_buffer += ch;
+    }
+    return result;
+}
+/// A key, Enter or a click on the item `sel`, or Left and Right (dir -1, 1) on a choice
+void coop_activate(const MkwVkCoopStatus& st, const CoopItem& it, int dir) {
+    if (!it.enabled) return;
+    if (it.kind == CI_TEXT && dir == 0) {
+        coop_edit = coop_sel;
+        coop_buffer = it.id == MKWVK_COOP_KEY ? "" : it.id == MKWVK_COOP_ADDRESS ? st.address : st.name;
+    } else if (it.kind == CI_CHOICE) {
+        const int step = dir ? dir : 1;
+        if (it.id == MKWVK_COOP_KEY_ON) host->coop_command(MKWVK_COOP_KEY_ON, nullptr, !st.key_on);
+        else if (it.id == MKWVK_COOP_VOICE) host->coop_command(MKWVK_COOP_VOICE, nullptr, (st.voice + 3 + step) % 3);
+    } else if (it.kind == CI_BUTTON && dir == 0) {
+        host->coop_command(it.id, nullptr, 0);
+    }
+}
+void coop_page_tick(bool mine, bool press[], bool mouse, const MkwVkPointer& ptr, int mx, int my, bool moved, bool& changed) {
+    MkwVkCoopStatus st{};
+    if (!coop_can()) { page = 0, changed = true; return; }
+    host->coop_status(&st);
+    const auto items = coop_items(st);
+    const int n = (int)items.size();
+    if (coop_edit >= 0) {   // (typing: the keys are text until Enter or Esc)
+        const int r = coop_type(mine);
+        if (coop_edit >= n) coop_edit = -1;
+        else if (r == 1 || r == -1) {
+            if (r == 1) host->coop_command(items[coop_edit].id, coop_buffer.c_str(), 0);
+            coop_edit = -1;
+        }
+        changed = true;
+        return;
+    }
+    coop_type(false);   // (keeps the edge states current while not typing, so the key that opened the field is not typed)
+    coop_sel = std::clamp(coop_sel, 0, std::max(0, n - 1));
+    if (mouse) {
+        const menu_hit::Hit hit = hits.at((float)mx, (float)my);
+        if (hit.part == menu_hit::kListLine && (moved || ptr.pressed) && hit.index != coop_sel) coop_sel = hit.index, changed = true;
+        if ((ptr.pressed & HOS_MOUSE_LEFT) && hit.part == menu_hit::kListLine) press[7] = true;
+        if (ptr.pressed & HOS_MOUSE_RIGHT) press[5] = true;
+    }
+    auto step = [&](int d) {
+        for (int k = 0; k < n; k++) {
+            coop_sel = (coop_sel + n + d) % n;
+            if (coop_selectable(items[coop_sel])) break;
+        }
+        changed = true;
+    };
+    if (!coop_selectable(items[coop_sel])) step(1);
+    if (press[1]) step(-1);
+    if (press[2]) step(1);
+    if (press[5]) page = 0, changed = true;
+    else if (press[7]) coop_activate(st, items[coop_sel], 0), changed = true;
+    else if (press[3] || press[4]) coop_activate(st, items[coop_sel], press[4] ? 1 : -1), changed = true;
+    mouse_read = mouse_read || mouse;
+}
+/// The other players over the picture (host/coop.c coop_marks): a marker and a name where each is, at the picture's edge when
+/// off it. Drawn whether or not the menu is open
+int coop_mark_count = 0;
+MkwVkCoopMark coop_marks_now[MKWVK_COOP_PLAYERS];
+void coop_marks_update(uint32_t w, uint32_t h) {
+    coop_mark_count = 0;
+    if (!host || !host->coop_marks) return;
+    const uint64_t v = present_sizes.load(std::memory_order_relaxed);
+    const float pw = (float)((v >> 48) & 0xffff), ph = (float)((v >> 32) & 0xffff);
+    const float aspect = pw > 0 && ph > 0 ? pw / ph : (float)w / std::max(1.0f, (float)h);
+    coop_mark_count = host->coop_marks(coop_marks_now, MKWVK_COOP_PLAYERS, aspect);
+}
+void draw_coop_marks(ui::Ctx& c) {
+    if (coop_mark_count <= 0) return;
+    const uint64_t v = present_sizes.load(std::memory_order_relaxed);
+    const float pw = (float)((v >> 48) & 0xffff), ph = (float)((v >> 32) & 0xffff);
+    float rw = c.w, rh = c.h;   // (the picture's place in the window: its shape kept, centred)
+    if (pw > 0 && ph > 0) {
+        const float want = pw / ph;
+        if (c.w / c.h > want) rw = c.h * want; else rh = c.w / want;
+    }
+    const float rx = (c.w - rw) * 0.5f, ry = (c.h - rh) * 0.5f, s = c.s;
+    for (int i = 0; i < coop_mark_count; i++) {
+        const MkwVkCoopMark& m = coop_marks_now[i];
+        const ImVec2 p(rx + m.x * rw, ry + m.y * rh);
+        const ImU32 col = m.speaking ? ui::rgba(120, 230, 120) : ui::kGoldHi;
+        const float r = (m.offscreen ? 7.0f : 6.0f) * s;
+        c.d->AddQuadFilled(ImVec2(p.x, p.y - r), ImVec2(p.x + r, p.y), ImVec2(p.x, p.y + r), ImVec2(p.x - r, p.y), ui::rgba(0, 0, 0, 200));
+        c.d->AddQuadFilled(ImVec2(p.x, p.y - r + 2 * s), ImVec2(p.x + r - 2 * s, p.y), ImVec2(p.x, p.y + r - 2 * s), ImVec2(p.x - r + 2 * s, p.y), col);
+        char label[64];
+        snprintf(label, sizeof label, m.distance >= 1 ? "%s  %.0f m" : "%s", m.name, m.distance);
+        const float px = 15 * s;
+        const ImVec2 sz = ui::size_of(c.f.body, px, label);
+        float tx = std::clamp(p.x - sz.x * 0.5f, 4 * s, c.w - sz.x - 4 * s);
+        const float ty = m.offscreen && m.y > 0.5f ? p.y - r - sz.y - 2 * s : p.y - r - sz.y - 3 * s;
+        const float o = std::max(1.0f, s);
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+                if (dx || dy) c.d->AddText(c.f.body, px, ImVec2(tx + dx * o, ty + dy * o), ui::rgba(0, 0, 0, 230), label);
+        c.d->AddText(c.f.body, px, ImVec2(tx, ty), m.speaking ? ui::rgba(170, 255, 170) : ui::kInkBright, label);
+    }
+}
+
 void draw_ask(ui::Ctx& c) {
     const float s = c.s, W = 560 * s, H = 232 * s;
     const ImVec2 p((c.w - W) * 0.5f, (c.h - H) * 0.5f), q = p + ImVec2(W, H);
@@ -3731,6 +3985,7 @@ void draw_menu(ui::Ctx& c) {
     else if (page == 1) draw_controls(k);
     else if (page == 3) draw_teleport(k);
     else if (page == 4) draw_inventory(k);
+    else if (page == 6) draw_coop(k);
     else if (tune_mode) draw_tune_bar(k);
     else draw_options(k);
     if (menu_ox <= 0) return;
@@ -4958,6 +5213,8 @@ void menu_tick() {
                 }
             }
         }
+    } else if (open_now.load() && page == 6) {   // (hookshot) the Co-op page
+        coop_page_tick(mine, press, mouse, ptr, mx, my, moved, changed);
     } else if (open_now.load() && page == 4) {   // the inventory
         const int chosen = item_choice;   // (the page follows the choice when it moves; the wheel's page stays otherwise)
         if (mouse) inventory_mouse(ptr, mx, my, press, changed);
@@ -5114,6 +5371,7 @@ void menu_tick() {
         } else if (r.cheat >= 0) cheat_press(r.cheat, press, changed);   // (a debug tool: on the Debug tab itself)
         else if (press[7] && is_motion_row(r)) cur_tab = TAB_MOTION, tab_selected[TAB_MOTION] = 0, press[7] = false, changed = true;
         else if (press[7] && is_share_row(r)) share_pipeline_list(), press[7] = false, changed = true;
+        else if (press[7] && is_coop_row(r)) page = 6, coop_sel = 0, coop_edit = -1, press[7] = false, changed = true;
         else if (press[7] && &r == &rows[kBugReportRow]) bug_report_save(), press[7] = false, changed = true;
         else if (press[7] && !r.value && can_bind()) page = 1, csel = 0, ccol = menu_hit::kCtlPrimary, changed = true;
         if ((press[3] || press[4] || press[7]) && r.value) {   // (Enter, or A, as Right)
@@ -5170,7 +5428,8 @@ void menu_record(VkCommandBuffer cmd, uint32_t index, uint32_t w, uint32_t h) {
     const bool start = startup_on.load(std::memory_order_acquire);
     const bool fps = opts.show_fps && !start;   // (no game frames yet: not "0 FPS" over the start-up screen)
     const bool open = open_now.load(std::memory_order_relaxed);
-    if (!start && !fps && !open) {   // (nothing shows: no ImGui frame, no render pass)
+    coop_marks_update(w, h);
+    if (!start && !fps && !open && coop_mark_count <= 0) {   // (nothing shows: no ImGui frame, no render pass)
         // (but a new window size or Menu size since the last bake: one frame with nothing drawn that bakes the menu's glyphs
         // and measures its page for the new size, so the next open has no hitch whatever was resized while nothing showed)
         if (prebake_needed(w, h) && ui::begin(w, h)) {
@@ -5195,6 +5454,7 @@ void menu_record(VkCommandBuffer cmd, uint32_t index, uint32_t w, uint32_t h) {
     if (start) draw_startup(c);   // (under the menu)
     if (open) draw_menu(c);
     if (fps) draw_fps(c, open);
+    draw_coop_marks(c);
     ::mkwvk::rec::boundary(::mkwvk::rec::B_DIRECT);   // (Dear ImGui records into cmd directly, its backend through its own pointers: what this thread recorded through vk_work.h reaches cmd first)
     ui::record(cmd, index, w, h);
 }
@@ -5202,11 +5462,13 @@ void menu_record(VkCommandBuffer cmd, uint32_t index, uint32_t w, uint32_t h) {
 void menu_record_image(VkCommandBuffer cmd, VkImage image, VkImageView view, uint32_t w, uint32_t h) {
     const bool open = open_now.load(std::memory_order_relaxed);
     const bool fps = opts.show_fps && !startup_on.load(std::memory_order_acquire);
-    if (!open && !fps) return;
+    coop_marks_update(w, h);
+    if (!open && !fps && coop_mark_count <= 0) return;
     if (!ui::begin(w, h)) return;
     ui::Ctx c = ui_ctx(w, h);
     if (open) draw_menu(c);
     if (fps) draw_fps(c, open);
+    draw_coop_marks(c);
     ::mkwvk::rec::boundary(::mkwvk::rec::B_DIRECT);   // (Dear ImGui records into cmd directly, its backend through its own pointers: what this thread recorded through vk_work.h reaches cmd first)
     ui::record_to(cmd, image, view, w, h);
 }
