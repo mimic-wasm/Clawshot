@@ -90,6 +90,8 @@ static uint32_t recomp_load32(Ctx *c, uint64_t a) {
 }
 static void a64_vset64(void *v, uint64_t bits) { memcpy(v, &bits, 8); memset((char *)v + 8, 0, 8); }
 int rx_option(int id, int otherwise) { CHECK(id == HOS_OPT_FOV && otherwise == 100); return menu; }
+int coop_wants_fov(void) { return 0; }   /* (host/coop.c: no session) */
+void coop_note_fov(float angle) { (void)angle; CHECK(0); }
 '''
 
 MAIN = r'''
