@@ -11,10 +11,13 @@
 #include <string.h>
 
 int rx_option(int id, int otherwise);
+int coop_wants_fov(void);        /* (host/coop.c: a co-op session has started and wants the angle, to place the other players) */
+void coop_note_fov(float angle);
 
 void hos_oot_fov(Ctx *c, uint64_t camera) {
     const int percent = rx_option(HOS_OPT_FOV, 100);
-    if (percent == 100 || percent < 50 || percent > 150 || !camera) return;
+    const int note = coop_wants_fov();   /* (no co-op session: the game as before, no camera memory read at 100%) */
+    if ((percent == 100 && !note) || percent < 50 || percent > 150 || !camera) return;
 
     const uint64_t views = recomp_load64(c, camera + 0x18);
     const uint64_t view = views ? recomp_load64(c, views + 8) : 0;
@@ -35,9 +38,12 @@ void hos_oot_fov(Ctx *c, uint64_t camera) {
     float angle;
     memcpy(&angle, c->vreg[0], sizeof angle);
     if (!isfinite(angle) || angle <= 0.0f || angle >= 3.141592654f) return;
-    /* Keep the vertical lens within 5..140 degrees even during an extreme zoom. */
-    angle = fminf(2.443460953f, fmaxf(0.087266463f, angle * ((float)percent / 100.0f)));
-    uint32_t bits;
-    memcpy(&bits, &angle, sizeof bits);
-    a64_vset64(c->vreg[0], bits);
+    if (percent != 100) {
+        /* Keep the vertical lens within 5..140 degrees even during an extreme zoom. */
+        angle = fminf(2.443460953f, fmaxf(0.087266463f, angle * ((float)percent / 100.0f)));
+        uint32_t bits;
+        memcpy(&bits, &angle, sizeof bits);
+        a64_vset64(c->vreg[0], bits);
+    }
+    if (note) coop_note_fov(angle);
 }

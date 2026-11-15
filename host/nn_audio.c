@@ -583,6 +583,7 @@ static int mix_depth(int i, int guard) {   /* how many sub mixes lie between thi
     return 1 + mix_depth(mixes[i].dest, guard + 1);
 }
 
+void coop_voice_mix(int16_t *pcm, int channels, int frames);   /* (host/coop.c) */
 static void render_frame(int16_t *pcm, int channels) {   /* 240 frames of the device's 2 or 6 channels */
     for (int m = 0; m < MAX_MIXES; m++)
         if (mixes[m].used) {
@@ -712,6 +713,7 @@ static void render_frame(int16_t *pcm, int channels) {   /* 240 frames of the de
             if (a < -32768) a = -32768;
             pcm[i * nch + ch] = (int16_t)a;
         }
+    coop_voice_mix(pcm, nch, FRAME);   /* (host/coop.c: the other players' voices, by distance; nothing without a started session) */
 }
 
 /* (the output's platform parts, outside the section tests/audio_output_errors_test.c compiles with its own) */

@@ -13,6 +13,7 @@
 #include "../gpu/vk/compat/hookshot_env.h"
 #endif
 #include "hos_paths.h"
+#include "coop.h"   /* (co-op: Link's place and the camera go to it) */
 #include "hos_wide_size.h"   /* (the widescreen picture's size, shared with the Insert menu) */
 #include "../gpu/vk/vk_api.h"
 #include "../gpu/vk/oot_cheat_items.h"
@@ -1278,6 +1279,46 @@ static int oot_flight_moved_away(Ctx *c, uint64_t actor, const float held[3]) {
     return apart > 2.0f * 2.0f;
 }
 
+/* (hookshot, host/coop.c) Link's place for co-op, from his actor on each update and at most 20 times a second: where he stands
+   (the actor's +796, as the flight reads it), which way he faces, the map and his age (oot_map_refresh's), and whether an event has
+   him. A session that has not started is sent nothing worth the reads */
+static void oot_coop_sample(Ctx *c, uint64_t actor) {
+    static int64_t next;
+    const int64_t now = hos_now_ns();
+    if (now < next) return;
+    next = now + 50000000LL;
+    int event = 0, loading = 0, child = 0;
+    CoopLocal l;
+    memset(&l, 0, sizeof l);
+    if (!hos_oot_state(&event, &loading, &child) || !hos_oot_current_map(l.map, sizeof l.map)) return;
+    for (unsigned i = 0; i < 3; i++) l.pos[i] = oot_load_float(c, actor + 796 + i * 4);
+    l.yaw = atan2f(oot_load_float(c, actor + 816), oot_load_float(c, actor + 840));
+    l.valid = !loading, l.event = event, l.child = child;
+    coop_set_local(&l);
+}
+
+/* push to talk: the key (V, or HOS_COOP_PTT_VK, a Windows key code) is down, the game's window has the keyboard, the Insert menu is shut */
+static int oot_coop_ptt(void) {
+    int rx_option(int id, int otherwise);
+    static int key;
+    if (!key) {
+        const char *e = getenv("HOS_COOP_PTT_VK");
+        key = e && strtol(e, NULL, 0) > 0 ? (int)strtol(e, NULL, 0) : 'V';
+    }
+    DWORD foreground = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &foreground);
+    return foreground == GetCurrentProcessId() && !rx_option(1, 0) && (GetAsyncKeyState(key) & 0x8000) != 0;
+}
+
+static void oot_coop_note_camera(Ctx *c, uint64_t view) {
+    if (!coop_wants_fov()) return;   /* (no session started: nothing to do) */
+    double eye[3], target[3];
+    memcpy(eye, A64_PTR(view + 96), sizeof eye);
+    memcpy(target, A64_PTR(view + 120), sizeof target);
+    (void)c;
+    coop_set_camera(eye, target);
+}
+
 static void oot_update_player_cheats(Ctx *c, uint64_t actor, uint64_t components) {
     int rx_option(int id, int otherwise);
     static uint64_t flying_actor, marked_actor, marked_controller;
@@ -1307,6 +1348,7 @@ static void oot_update_player_cheats(Ctx *c, uint64_t actor, uint64_t components
     oot_inventory_refresh(c, now);
     oot_player_speed(c, components);
     oot_map_refresh(c, now);
+    oot_coop_sample(c, actor);
     if (action >= OOT_CHEAT_ITEM_ACTION && action < OOT_CHEAT_ITEM_ACTION + 256 * (int)OOT_ITEM_COUNT) {
         oot_inventory_edit(c, action);
     } else if (action == OOT_AGE_ACTION) {
@@ -1641,6 +1683,7 @@ void hos_oot_free_view(Ctx *c, uint64_t view) {
 
     // Camera zero supplies the gameplay view. The same matrix routine also serves other cameras.
     if (oot_gameplay_view(c) != view) return;
+    oot_coop_note_camera(c, view);
 
     static SRWLOCK lock = SRWLOCK_INIT;
     AcquireSRWLockExclusive(&lock);
@@ -1895,6 +1938,16 @@ static int game_main(int argc, char **argv) {
 #endif
             }
         }
+    }
+    if (beside_image[0]) {   /* (co-op: the player's choices beside the game's other settings, and the push-to-talk key) */
+        char prefs[MAX_PATH];
+        snprintf(prefs, sizeof prefs, "%s", beside_image);
+        char *slash = strrchr(prefs, SEP_S[0]);
+        if (slash) {
+            snprintf(slash + 1, sizeof prefs - (size_t)(slash + 1 - prefs), "hookshot_coop.ini");
+            coop_set_prefs_path(prefs);
+        }
+        coop_set_ptt_probe(oot_coop_ptt);
     }
     if (!image) {
         fprintf(stderr, "usage: %s [image.bin] [--romfs <dir>] [--user <dir>] [--trace] [--prepare-shaders]\n",
