@@ -280,10 +280,10 @@ void hos_update_check(void) {
 #include <string.h>
 #include <unistd.h>
 
-/* (the same offer as Windows, when the player started bin/hookshot itself. The launcher sets HOOKSHOT_NO_UPDATE_CHECK
+/* (the same offer as Windows, when the player started bin/clawshot itself. The launcher sets CLAWSHOT_NO_UPDATE_CHECK
    and asks in its own window. curl and zenity do the network and the question; without either, the game just starts) */
 
-/* "Skip this version" is kept with the saves, where they are (hos_main.c sets it first: $XDG_DATA_HOME/hookshot, or
+/* "Skip this version" is kept with the saves, where they are (hos_main.c sets it first: $XDG_DATA_HOME/clawshot, or
    --user's folder). It was written to user/ beside the game, as on Windows, where Linux keeps no saves any more: the
    start's move of an old user/ folder (saves_dir) took the file for one, moved it to the saves' place and wrote
    saves-moved.txt, so the next start asked again. Skipped again, the file was in both places, which the move reads as
@@ -334,17 +334,17 @@ static int pipe_tag(const char *cmd, char *tag, size_t cap, int newest) {
 static int latest_tag(const char *have, char *tag, size_t cap) {
     if (nightly_version(have))
         return pipe_tag("curl -fsSL --max-time 8 --retry 2 -A Hookshot-update-check "
-                        "https://github.com/NotRexed/Hookshot/releases/download/nightly/hookshot-linux.txt 2>/dev/null", tag, cap, 0);
+                        "https://github.com/mimic-wasm/Clawshot/releases/download/nightly/hookshot-linux.txt 2>/dev/null", tag, cap, 0);
     if (strchr(have, '-') && pipe_tag("curl -fsSL --max-time 6 --retry 2 -A Hookshot-update-check "
                                       "-H \"Accept: application/vnd.github+json\" "
-                                      "'https://api.github.com/repos/NotRexed/Hookshot/releases?per_page=20' 2>/dev/null", tag, cap, 1))
+                                      "'https://api.github.com/repos/mimic-wasm/Clawshot/releases?per_page=20' 2>/dev/null", tag, cap, 1))
         return 1;
     if (pipe_tag("curl -fsSL --max-time 4 --retry 2 -A Hookshot-update-check "
                  "-H \"Accept: application/vnd.github+json\" "
-                 "https://api.github.com/repos/NotRexed/Hookshot/releases/latest 2>/dev/null", tag, cap, 0))
+                 "https://api.github.com/repos/mimic-wasm/Clawshot/releases/latest 2>/dev/null", tag, cap, 0))
         return 1;
     return pipe_tag("curl -fsSL --max-time 8 --retry 2 -A Hookshot-update-check "
-                    "https://github.com/NotRexed/Hookshot/releases/latest/download/hookshot-linux.txt 2>/dev/null", tag, cap, 0);
+                    "https://github.com/mimic-wasm/Clawshot/releases/latest/download/hookshot-linux.txt 2>/dev/null", tag, cap, 0);
 }
 
 /* the builder an update installed (builder/linux/linux_update.py): <data>/hookshot/builder/versions/<current>/AppRun. The
@@ -380,7 +380,7 @@ void hos_update_check(void) {
     char dir[MAX_PATH];
     memcpy(dir, path, n);
     dir[n] = 0;
-    snprintf(path, sizeof path, "%shookshot_version.txt", dir);
+    snprintf(path, sizeof path, "%hookshot_version.txt", dir);
     if (!read_value(path, "version", have, sizeof have) || !safe_tag(have)) return;
     char skip[MAX_PATH + 64];
     snprintf(skip, sizeof skip, "%s/hookshot_update_skip.txt", hos_user_dir);
@@ -400,8 +400,8 @@ void hos_update_check(void) {
     char text[1600], cmd[4096];
     snprintf(text, sizeof text,
              has_builder
-                 ? "A new version of Hookshot is out: %s (this game is %s). Update now? The game closes, and Hookshot Builder downloads only what changed and builds this folder again. Your saves and settings stay."
-                 : "A new version of Hookshot is out: %s (this game is %s). The builder that made this folder was not found. Open the download page?",
+                 ? "A new version of Clawshot is out: %s (this game is %s). Update now? The game closes, and Hookshot Builder downloads only what changed and builds this folder again. Your saves and settings stay."
+                 : "A new version of Clawshot is out: %s (this game is %s). The builder that made this folder was not found. Open the download page?",
              tag, have);
     snprintf(cmd, sizeof cmd, "zenity --list --title=Hookshot --hide-header --column= --text='%s' 'Update now' 'Not now' 'Skip this version'", text);
     FILE *pick = popen(cmd, "r");
@@ -418,7 +418,7 @@ void hos_update_check(void) {
     if (strncmp(answer, "Update", 6)) return;
     if (!has_builder) {
         if (fork() == 0) {
-            execlp("xdg-open", "xdg-open", "https://github.com/NotRexed/Hookshot/releases/latest", (char *)0);
+            execlp("xdg-open", "xdg-open", "https://github.com/mimic-wasm/Clawshot/releases/latest", (char *)0);
             _exit(127);
         }
         return;
