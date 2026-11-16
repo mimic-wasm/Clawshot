@@ -8,8 +8,7 @@ using System.Windows;
 
 namespace HookshotBuilder;
 
-/// The launcher's Update, and --update <game folder> --tag <release> (what a game built when it asked about updates itself
-/// starts). When these tools are
+/// The game's update offer (host/hos_update.c) starts this app with --update <game folder> --tag <release>. When these tools are
 /// not that release, the release's HookshotBuilder.zip is downloaded and unpacked beside this app, and the new app is started with
 /// --fetched to build the folder; when they are, the folder is built again here (nx2/make_game.py --update: from the game files the
 /// folder keeps).
@@ -36,7 +35,7 @@ static class Updater
         UpdateFolder(w, folder, tag, fetched);
     }
 
-    // ---- the update tracks (the Track menu; by default the track of these tools). builder/setup/setup.c and
+    // ---- the update tracks (the Track menu; by default the track of these tools). host/hos_update.c and
     // builder/linux/linux_update.py have the same rules ----
     public const string Release = "release", Candidate = "rc", Nightly = "nightly";
     const string Releases = "https://api.github.com/repos/NotRexed/Hookshot/releases";
@@ -191,7 +190,7 @@ static class Updater
         var cache = Path.Combine(BuilderHome.Base, "update");
         Directory.CreateDirectory(cache);
         var setup = Path.Combine(cache, SetupAsset);
-        w.Note("Downloading the new Hookshot Builder");
+        w.Note(w.ClawshotEntry ? "Downloading the new Clawshot update" : "Downloading the new Hookshot Builder");
         await DownloadWithRetries(w, http, setupUrl, setupApiUrl, setup, setupSize, setupDigest, token);
         var si = new ProcessStartInfo(setup) { UseShellExecute = false, WorkingDirectory = cache };
         foreach (var arg in args) si.ArgumentList.Add(arg);
@@ -208,7 +207,7 @@ static class Updater
         var tools = Tools.Find();
         if (tools == null)
         {
-            w.DownloadFailed("The Hookshot tools were not found next to this app.");
+            w.DownloadFailed(w.ClawshotEntry ? "The Clawshot files were not found next to this app." : "The Hookshot tools were not found next to this app.");
             return;
         }
         // (just downloaded, but another release than asked for: the setup installed the release before it (GitHub's latest link lags

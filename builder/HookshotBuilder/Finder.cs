@@ -73,18 +73,21 @@ static class Finder
 
     // ---- shortcuts to the built game ----
 
-    public static string DesktopLink => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Hookshot.lnk");
-    public static string StartLink => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Hookshot.lnk");
+    public static string DesktopLink => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Clawshot.lnk");
+    public static string StartLink => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Clawshot.lnk");
+    static string LegacyDesktopLink => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Hookshot.lnk");
+    static string LegacyStartLink => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Hookshot.lnk");
 
     /// Made or removed as the two ticks say (Windows' own shell object writes the .lnk)
     /// The shortcuts the player has, made again (onto the folder's launcher now that it has one); none made where there was none
-    public static void RefreshShortcuts(string gameFolder) => Shortcuts(gameFolder, File.Exists(DesktopLink), File.Exists(StartLink));
+    public static void RefreshShortcuts(string gameFolder) => Shortcuts(gameFolder, File.Exists(DesktopLink) || File.Exists(LegacyDesktopLink),
+                                                                 File.Exists(StartLink) || File.Exists(LegacyStartLink));
 
     public static void Shortcuts(string gameFolder, bool desktop, bool start)
     {
-        // (hookshot.exe: the game's launcher in a folder built since it came (Play, and Update when a newer release is out), else the
-        // game. The icon is the game's own: bin\hookshot.exe when it is there)
-        var exe = Path.Combine(gameFolder, "hookshot.exe");
+        // (clawshot.exe is the folder launcher; the game binary stays bin\hookshot.exe)
+        var clawshot = Path.Combine(gameFolder, "clawshot.exe");
+        var exe = File.Exists(clawshot) ? clawshot : Path.Combine(gameFolder, "hookshot.exe");
         var icon = File.Exists(Path.Combine(gameFolder, "bin", "hookshot.exe")) ? Path.Combine(gameFolder, "bin", "hookshot.exe") : exe;
         foreach (var (link, want) in new[] { (DesktopLink, desktop), (StartLink, start) })
         {
@@ -93,6 +96,8 @@ static class Finder
                 if (!want)
                 {
                     if (File.Exists(link)) File.Delete(link);
+                    var legacy = link == DesktopLink ? LegacyDesktopLink : LegacyStartLink;
+                    if (File.Exists(legacy)) File.Delete(legacy);
                     continue;
                 }
                 if (!File.Exists(exe)) continue;
@@ -102,9 +107,11 @@ static class Finder
                 sl.SetPath(exe);
                 sl.SetWorkingDirectory(gameFolder);
                 sl.SetIconLocation(icon, 0);
-                sl.SetDescription("The Legend of Zelda: Ocarina of Time, built by Hookshot");
+                sl.SetDescription("The Legend of Zelda: Ocarina of Time, built by Clawshot");
                 Directory.CreateDirectory(Path.GetDirectoryName(link)!);
                 ((System.Runtime.InteropServices.ComTypes.IPersistFile)sl).Save(link, true);
+                var oldLink = link == DesktopLink ? LegacyDesktopLink : LegacyStartLink;
+                if (File.Exists(oldLink)) File.Delete(oldLink);
             }
             catch (Exception e)
             {
