@@ -1031,7 +1031,7 @@ looks like.
 
 Clawshot exists thanks to the work of many people:
 
-- **NotRexed**: Clawshot, BlueShell (Mario Kart World), Skybound (Tears of the Kingdom) and the a64-kit tools.
+- **NotRexed**: Made hookshot, BlueShell (Mario Kart World), Skybound (Tears of the Kingdom) and the a64-kit tools.
 - **[Eden](https://git.eden-emu.dev/eden-emu/eden)** and **Eglantine**: the shader recompiler and Switch 2 shader work.
 - **suyu**: the graphics decoders and the AArch64 translator.
 - **[seedds/nxnative](https://github.com/seedds/nxnative)**: reference for how task and mesh shaders work.
@@ -1056,6 +1056,7 @@ Clawshot exists thanks to the work of many people:
   DLSS, DLAA and Reflex, the exposure flicker and fog fixes, build speed, CI), madebyjordan (AMD FSR 4.1), N3oTraX (FSR 4 on
   Linux), shayderrr, gab9281, Wpaif, nicholasgower, ZurielAtr, Joey-Magnus, Zorkats,
   d3zessete, chrispository, vzeol, leonidasmark, Segmentree, ShyVortex, hiKareeem and i900gaming, among others.
+- **Mimic** made clawshot and like everything 
 
 ## License
 
