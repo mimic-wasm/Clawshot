@@ -37,6 +37,9 @@ static DWORD g_http_status;   /* (the last answer: 0 when the server was not rea
 static wchar_t g_cmdline[2048];
 static HbHome g_home;
 static int g_home_ok;
+static int g_game_launcher;
+static const wchar_t *product_name(void) { return g_game_launcher ? L"Clawshot" : L"Hookshot Builder"; }
+static const wchar_t *setup_title(void) { return g_game_launcher ? L"Clawshot" : L"Hookshot Builder setup"; }
 /* (RecompLauncher) --cli <make_game.py's options>: no window, the builder's lines on this process's stdout and stderr, its exit code
    as ours; --play <game folder>: the game itself, waited for. Neither is used by the builder's own start, which is unchanged. */
 static int g_headless;
@@ -99,7 +102,7 @@ static void fail(const wchar_t *fmt, ...) {
     vswprintf(msg, 1024, fmt, ap);
     va_end(ap);
     if (g_headless) say_error(msg), ExitProcess(1);
-    MessageBoxW(g_win, msg, L"Hookshot Builder setup", MB_OK | MB_ICONERROR);
+    MessageBoxW(g_win, msg, setup_title(), MB_OK | MB_ICONERROR);
     PostMessageW(g_win, WM_DONE, 1, 0);
     ExitThread(1);
 }
@@ -286,12 +289,14 @@ static int portable_prefix(wchar_t *command) {
 static int init_home(int portable) {
     wchar_t self[MAX_PATH], requested[MAX_PATH] = L"", standard[MAX_PATH] = L"", profile[MAX_PATH];
     DWORD n = GetModuleFileNameW(NULL, self, MAX_PATH);
-    if (!n || n >= MAX_PATH || GetEnvironmentVariableW(L"HOOKSHOT_SETUP_BASE", requested, MAX_PATH) >= MAX_PATH) return 0;
-    if (SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, profile) == S_OK)
-        hb_home_join(standard, MAX_PATH, profile, L"HookshotBuilder");   /* an explicit/portable home needs no AppData */
+    if (!n || n >= MAX_PATH) return 0;
     const wchar_t *name = wcsrchr(self, L'\\');
     name = name ? name + 1 : self;
-    const int game = !_wcsicmp(name, L"hookshot.exe");
+    g_game_launcher = !_wcsicmp(name, L"clawshot.exe");
+    if (GetEnvironmentVariableW(L"HOOKSHOT_SETUP_BASE", requested, MAX_PATH) >= MAX_PATH) return 0;
+    if (SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, profile) == S_OK)
+        hb_home_join(standard, MAX_PATH, profile, L"HookshotBuilder");   /* an explicit/portable home needs no AppData */
+    const int game = g_game_launcher || !_wcsicmp(name, L"hookshot.exe");
     if (portable) {
         if (*requested) {
             if (!hb_home_full(g_home.root, requested)) return 0;
@@ -403,24 +408,12 @@ static int copy_part_tree(const wchar_t *from, const wchar_t *to) {
     return ok;
 }
 
-/* A folder tar.exe has just written can stay open a few seconds in an antivirus scan or the search indexer: MoveFileW then fails
-   with access denied or a sharing violation. Those are tried again for up to 20 s, any other error is returned at once.
-   On failure GetLastError is the last try's. */
-static BOOL move_retry(const wchar_t *from, const wchar_t *to) {
-    for (int tries = 1;; tries++) {
-        if (MoveFileW(from, to)) return TRUE;
-        const DWORD error = GetLastError();
-        if ((error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION) || tries == 80) return FALSE;
-        Sleep(250);
-    }
-}
-
 static int publish_install(const wchar_t *staged, const wchar_t *final, int portable) {
-    if (!portable || GetFileAttributesW(final) == INVALID_FILE_ATTRIBUTES) return move_retry(staged, final) != 0;
+    if (!portable || GetFileAttributesW(final) == INVALID_FILE_ATTRIBUTES) return MoveFileW(staged, final) != 0;
     wchar_t backup[MAX_PATH];
     const int n = home_path(backup, L"%ls.rollback-%lu-%llu", final, GetCurrentProcessId(), GetTickCount64());
     if (n < 0 || n >= MAX_PATH || !MoveFileW(final, backup)) return 0;
-    if (!move_retry(staged, final)) {
+    if (!MoveFileW(staged, final)) {
         const DWORD error = GetLastError();
         /* If restoration is prevented externally, the complete old installation remains in .rollback-* for recovery. */
         MoveFileW(backup, final);
@@ -695,7 +688,7 @@ static DWORD WINAPI work(LPVOID unused) {
     home_path(downloads, L"%ls\\downloads", base);
     mkdirs(downloads);
 
-    status(L"Looking for the latest Hookshot Builder...");
+    status(L"Looking for the latest %ls...", product_name());
     Mem man = {0};
     /* (tried again on a server error or no answer: GitHub's release downloads answered 504 for an hour, 2026-11-08, and every
        start failed at once) */
@@ -708,7 +701,7 @@ static DWORD WINAPI work(LPVOID unused) {
         if (attempt) {
             status(L"GitHub didn't answer (%lu). Trying again in %d s...", g_http_status, waits[attempt - 1]);
             Sleep(waits[attempt - 1] * 1000);
-            status(L"Looking for the latest Hookshot Builder...");
+            status(L"Looking for the latest %ls...", product_name());
         }
         free(man.p);
         man = (Mem){0};
@@ -726,11 +719,13 @@ static DWORD WINAPI work(LPVOID unused) {
     }
     if (!ok)
         fail(g_http_status == 404
-                 ? L"The latest Hookshot release has no setup files yet. Download HookshotBuilder.zip from the releases page for now: "
-                   L"https://github.com/NotRexed/Hookshot/releases/latest"
+                 ? (g_game_launcher
+                        ? L"The latest Clawshot release has no setup files yet. Open the releases page: https://github.com/NotRexed/Hookshot/releases/latest"
+                        : L"The latest Hookshot release has no setup files yet. Download HookshotBuilder.zip from the releases page: https://github.com/NotRexed/Hookshot/releases/latest")
              : g_http_status ? L"GitHub's download servers are failing right now (an error 500 or above, tried 8 times over 3 minutes). "
                                L"This is on GitHub's side: try again in a few minutes, or later today."
-                             : L"Could not reach GitHub to get the Hookshot Builder. Check your internet connection and try again.");
+                             : g_game_launcher ? L"Could not reach GitHub to start Clawshot. Check your internet connection and try again."
+                                               : L"Could not reach GitHub to get the Hookshot Builder. Check your internet connection and try again.");
 
     char tag[128] = "", run[260] = "";
     Part parts[MAX_PARTS];
@@ -826,9 +821,10 @@ static DWORD WINAPI work(LPVOID unused) {
                 }
                 if (!got) DeleteFileW(part), fail(retryable(g_http_status)
                     ? L"Downloading part %d of %d failed: GitHub's download servers are failing right now (tried 8 times over 3 "
-                      L"minutes). This is on GitHub's side. The parts already downloaded are kept: run HookshotBuilder.exe again in a "
+                      L"minutes). This is on GitHub's side. The parts already downloaded are kept: run %ls again in a "
                       L"few minutes and it carries on from here."
-                    : L"Downloading part %d of %d failed. Check your connection and free space, then try again.", i + 1, nparts);
+                    : L"Downloading part %d of %d failed. Check your connection and free space, then try again.",
+                    i + 1, nparts, g_game_launcher ? L"clawshot.exe" : L"HookshotBuilder.exe");
                 if (strcmp(have, p->sha)) DeleteFileW(part), fail(L"Part %d of %d did not download correctly (its checksum differs). Try again.", i + 1, nparts);
                 /* (the checked file or nothing: an old <sha>.zip that could not be removed is never unpacked instead) */
                 if (!MoveFileExW(part, zip, MOVEFILE_REPLACE_EXISTING)) {
@@ -874,14 +870,8 @@ static DWORD WINAPI work(LPVOID unused) {
                 w(p->from, wf, 260), w(p->to, wt, 260);
                 home_path(from, L"%ls\\%ls", dest, wf);
                 home_path(to, L"%ls\\%ls", dest, wt);
-                if (GetFileAttributesW(to) == INVALID_FILE_ATTRIBUTES && !move_retry(from, to)) {
-                    const DWORD e = GetLastError();
-                    if (e == ERROR_ACCESS_DENIED || e == ERROR_SHARING_VIOLATION)
-                        fail(L"Could not set up part %d of %d (renaming %ls, Windows error %lu). Another program is holding the files just unpacked, "
-                             L"often an antivirus scan: run the setup again, and if it happens again allow the folder %ls in it.",
-                             i + 1, nparts, wf, e, g_home.root);
-                    fail(L"Could not set up part %d of %d (renaming %ls, Windows error %lu).", i + 1, nparts, wf, e);
-                }
+                if (GetFileAttributesW(to) == INVALID_FILE_ATTRIBUTES && !MoveFileW(from, to))
+                    fail(L"Could not set up part %d of %d (renaming %ls).", i + 1, nparts, wf);
             }
         }
         wchar_t staged_exe[MAX_PATH];
@@ -890,7 +880,7 @@ static DWORD WINAPI work(LPVOID unused) {
         if (!builder_ready(staged_exe))
             fail(L"The Builder or its self-contained .NET runtime is incomplete after unpacking (%ls). Your antivirus may have quarantined files from %ls. Check its quarantine/history, then run the setup again. No complete installation was published.", staged_exe, install);
         if (!publish_install(install, final_dir, g_home.portable))
-            fail(L"Could not finish installing into %ls (Windows error %lu). A preserved repair backup, if restoration was blocked, is beside it as .rollback-*.", final_dir, GetLastError());
+            fail(L"Could not finish installing into %ls. A preserved repair backup, if restoration was blocked, is beside it as .rollback-*.", final_dir);
         wcscpy(install, final_dir);
         write_small(marker, tag);
         write_parts(install, parts, nparts);
@@ -903,7 +893,7 @@ static DWORD WINAPI work(LPVOID unused) {
     prune(versions, downloads, tag, parts, nparts);
     rmtree(downloads);   /* (installed: its zips are not kept; an update moves unchanged folders over instead, reuse_part) */
 
-    status(L"Starting the Hookshot Builder...");
+    status(L"Starting %ls...", product_name());
     wchar_t cmd[4096], dir[MAX_PATH];
     wcscpy(dir, exe);
     wchar_t *slash = wcsrchr(dir, L'\\');
@@ -943,7 +933,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(h, msg, wp, lp);
 }
 
-/* (launch mode) "Hookshot Launcher.exe" in a game folder (nx2/make_game.py puts this file there under that name): the installed
+/* (launch mode) clawshot.exe in a Windows game folder (nx2/make_game.py puts this file there): the installed
    builder opened as the game's launcher (--launch <that folder>: Play, and Update when a newer release is out), at once, with no
    window, download or network of its own. With no builder installed yet, the setup runs as usual and then opens the launcher. */
 static int launch_installed(const wchar_t *args) {
@@ -1010,7 +1000,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdline, int show) {
         GetModuleFileNameW(NULL, self, MAX_PATH);
         const wchar_t *name = wcsrchr(self, L'\\');
         name = name ? name + 1 : self;
-        if (!_wcsicmp(name, L"hookshot.exe") && !wcsstr(g_cmdline, L"--")) {   /* (the game folder's launcher) */
+        if ((!_wcsicmp(name, L"clawshot.exe") || !_wcsicmp(name, L"hookshot.exe")) && !wcsstr(g_cmdline, L"--")) {   /* (the game folder's launcher; old name accepted) */
             wchar_t *slash = wcsrchr(self, L'\\');
             if (slash) *slash = 0;
             swprintf(g_cmdline, 2047, L"--launch \"%ls\"", self);
@@ -1025,7 +1015,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdline, int show) {
                 CloseHandle(pi.hThread), CloseHandle(pi.hProcess);
                 return 0;
             }
-            MessageBoxW(NULL, L"The game (bin\\hookshot.exe) is missing from this folder. Build it again with the Hookshot Builder.", L"Hookshot",
+            MessageBoxW(NULL, L"The game (bin\\hookshot.exe) is missing from this folder. Build it again with the Clawshot Builder.", L"Clawshot",
                         MB_ICONERROR);
             return 1;
         }
@@ -1034,7 +1024,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdline, int show) {
     if (!g_home_ok) {
         const wchar_t *why = L"The Builder home is unavailable or its portable marker is invalid. For a new portable install, put this setup in a writable folder and start it with --portable.";
         if (g_headless) say_error(why);
-        else MessageBoxW(NULL, why, L"Hookshot Builder setup", MB_OK | MB_ICONERROR);
+        else MessageBoxW(NULL, why, setup_title(), MB_OK | MB_ICONERROR);
         return 1;
     }
     INITCOMMONCONTROLSEX icc = {sizeof icc, ICC_PROGRESS_CLASS};
@@ -1046,7 +1036,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdline, int show) {
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     RegisterClassW(&wc);
     const int ww = 460, wh = 140;
-    g_win = CreateWindowW(L"HookshotSetup", L"Hookshot Builder setup", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+    g_win = CreateWindowW(L"HookshotSetup", setup_title(), WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                           (GetSystemMetrics(SM_CXSCREEN) - ww) / 2, (GetSystemMetrics(SM_CYSCREEN) - wh) / 2, ww, wh, NULL, NULL, inst, NULL);
     g_text = CreateWindowW(L"STATIC", L"Starting...", WS_CHILD | WS_VISIBLE, 16, 16, ww - 48, 22, g_win, NULL, inst, NULL);
     g_bar = CreateWindowW(PROGRESS_CLASSW, NULL, WS_CHILD | WS_VISIBLE | PBS_MARQUEE, 16, 48, ww - 48, 20, g_win, NULL, inst, NULL);
