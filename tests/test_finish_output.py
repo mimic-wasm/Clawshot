@@ -51,6 +51,8 @@ class FinishOutputTests(unittest.TestCase):
         self.built.mkdir(parents=True)
         self.out.mkdir()
         self.source, self.destination = self.built / "hookshot.exe", self.out / "hookshot.exe"
+        self.loader_destination = self.out / "clawshot.exe"
+        self.loader_old = None
         self.source.write_bytes(b"new synthetic executable")
         self.destination.write_bytes(b"existing synthetic executable")
         (self.work / "sa" / "image").mkdir()
@@ -68,6 +70,8 @@ class FinishOutputTests(unittest.TestCase):
     def finish(self, launcher=False):
         if launcher:
             (self.root / "HookshotBuilder-Setup.exe").write_bytes(b"new synthetic launcher")
+            self.loader_old = b"existing synthetic Clawshot loader"
+            self.loader_destination.write_bytes(self.loader_old)
         with mock.patch.object(make_game, "BESIDE", ["hookshot.exe"]):
             # Comprehensions use globals. Keep one namespace, as in production, and discover only authored setup files.
             namespace = dict(make_game.__dict__, built=str(self.built), out=str(self.out), work=str(self.work),
@@ -78,9 +82,12 @@ class FinishOutputTests(unittest.TestCase):
     def assert_installed_unchanged(self):
         self.assertEqual(self.destination.read_bytes(), b"existing synthetic executable")
         self.assertEqual((self.out / "image.bin").read_bytes(), b"existing synthetic image")
+        if self.loader_old is not None:
+            self.assertEqual(self.loader_destination.read_bytes(), self.loader_old)
 
-    def assert_no_staging_files(self):
-        self.assertEqual(sorted(path.name for path in self.out.iterdir()), ["hookshot.exe", "image.bin"])
+    def assert_no_staging_files(self, launcher=False):
+        expected = ["bin", "clawshot.exe", "image.bin"] if launcher else ["hookshot.exe", "image.bin"]
+        self.assertEqual(sorted(path.name for path in self.out.iterdir()), expected)
 
     def stopped_output(self):
         output = io.StringIO()
@@ -145,9 +152,11 @@ class FinishOutputTests(unittest.TestCase):
             self.finish(launcher=True)
         self.assertEqual(copied, [self.source, self.image, self.root / "HookshotBuilder-Setup.exe"])
         self.assertEqual(binary.read_bytes(), self.source.read_bytes())
-        self.assertEqual(self.destination.read_bytes(), b"new synthetic launcher")
+        self.assertFalse(self.destination.exists())
+        self.assertEqual(self.loader_destination.read_bytes(), b"new synthetic launcher")
         self.assertEqual((self.out / "image.bin").read_bytes(), self.image.read_bytes())
         self.assertEqual(list(self.out.rglob("*.new")), [])
+        self.assert_no_staging_files(launcher=True)
 
     def test_partial_launcher_copy_preserves_game_image_and_launcher(self):
         binary = self.out / "bin" / "hookshot.exe"
@@ -168,7 +177,8 @@ class FinishOutputTests(unittest.TestCase):
         self.assertEqual(binary.read_bytes(), b"existing synthetic game in bin")
         self.assertEqual(binary.with_name("hookshot.exe.new").read_bytes(), self.source.read_bytes())
         self.assertEqual((self.out / "image.bin.new").read_bytes(), self.image.read_bytes())
-        self.assertEqual((self.out / "hookshot.exe.new").read_bytes(), b"partial launcher")
+        self.assertEqual((self.out / "clawshot.exe.new").read_bytes(), b"partial launcher")
+        self.assertEqual(self.loader_destination.read_bytes(), self.loader_old)
 
     def test_partial_executable_copy_preserves_both_installed_files(self):
         def partial_copy(source, destination):

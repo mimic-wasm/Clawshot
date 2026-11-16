@@ -42,6 +42,7 @@ static HANDLE fixture_open(LPCWSTR path,DWORD access,DWORD share,LPSECURITY_ATTR
 #include "portable_home.h"
 static HbHome g_home;
 static int g_home_ok;
+static int g_game_launcher;
 static void fail(const wchar_t *format, ...) { (void)format; exit(90); }
 static wchar_t module[MAX_PATH], profile[MAX_PATH], started[4096], workdir[MAX_PATH];
 static DWORD fake_module(HMODULE m, wchar_t *out, DWORD cap) {
@@ -77,6 +78,9 @@ int wmain(int argc, wchar_t **argv) {
     int mode = _wtoi(argv[4]);
     deny_writes = mode == 4;
     g_home_ok = init_home(mode == 1 || mode == 4);
+    const wchar_t *module_name = wcsrchr(module, L'\\');
+    module_name = module_name ? module_name + 1 : module;
+    CHECK(g_game_launcher == (!_wcsicmp(module_name, L"clawshot.exe")));
     if (mode == 2 || mode == 4) { CHECK(!g_home_ok); return 0; }
     CHECK(g_home_ok && !wcscmp(g_home.root,argv[3]));
     CHECK(g_home.portable == (mode != 3));
@@ -132,13 +136,14 @@ int wmain(int argc, wchar_t **argv) {
         game.mkdir()
         (game / ".hookshot_builder_home").write_text("../HookshotBuilder", encoding="utf-8")
         (game / "hookshot_version.txt").write_text("version=v-authored\nbuilder_local=1\n")
+        run(game / "clawshot.exe", home, 0)
         run(game / "hookshot.exe", home, 0)
         moved = root / "Relocated ü, tree"
         tree.rename(moved)
         home, game = moved / "HookshotBuilder", moved / "Game"
-        run(game / "hookshot.exe", home, 0)
+        run(game / "clawshot.exe", home, 0)
         (game / ".hookshot_builder_home").unlink()
-        run(game / "hookshot.exe", home, 2)
+        run(game / "clawshot.exe", home, 2)
         run(root / "standard-setup.exe", profile / "HookshotBuilder", 3)
         run(root / "downloaded-setup.exe", home, 2, {"HOOKSHOT_SETUP_BASE": "relative"})
         run(root / "downloaded-setup.exe", home, 2, {"HOOKSHOT_SETUP_BASE": str(profile), "HOOKSHOT_BUILDER_PORTABLE": "1"})
