@@ -56,6 +56,7 @@
 #include "vk_draw.h"
 #include "vk_progcache.h"
 #include "vk_menu.h"
+#include "amd_software_mma.h"
 
 // (EvilOOT, RX_VK_PTR_DIAG) the pointer pass's counts for this thread's translations
 // (global_memory_to_storage_buffer_pass.cpp, declared by hand so no Eden header changes)
@@ -603,6 +604,12 @@ Shader::Profile make_profile() {
     // (RX_VK_FRAG_SHUFFLE_FALLBACK=0 or 1, a test: the fragment stages' shuffles native or through broadcasts, whatever the
     // driver; in the cache's stamp)
     if (const char* e = getenv("RX_VK_FRAG_SHUFFLE_FALLBACK")) p.has_broken_spirv_fragment_shuffle = e[0] == '1';
+    // (hookshot-amd) Polaris and other AMD cards without cooperative matrices run HMMA in software. Their proprietary
+    // compiler's subgroup-shuffle path can corrupt the network output; use the already-supported broadcast/select path.
+    p.has_broken_spirv_software_mma_shuffle = amd_software_mma::use_broadcast_fallback(
+        dev.driver_id == VK_DRIVER_ID_AMD_PROPRIETARY, Shader::Backend::SPIRV::mma_software);
+    if (p.has_broken_spirv_software_mma_shuffle)
+        logf("vk: software matrix shuffles use subgroup broadcasts (AMD proprietary driver)");
     // (hookshot) gathers nudged by 1/512 of a texel on AMD's and Intel's drivers, as Eden and Lichii have it (vk_vendor.h; in the
     // cache's stamp)
     p.need_gather_subpixel_offset = dev.fixes.gather_offset;
@@ -1178,7 +1185,8 @@ uint64_t translator_stamp() {
     // which stages it pins to 32 lanes, which keep the short path: profile_graphics. An explicit warp override bypasses
     // the pinned graphics profile even if the base profile already has the requested width)
     const uint32_t lanes[] = {profile().warp_size_potentially_larger_than_guest ? 1u : 0u, profile().max_subgroup_size,
-                              profile().has_broken_spirv_fragment_shuffle ? 1u : 0u, (uint32_t)dev.sg32_stages,
+                              profile().has_broken_spirv_fragment_shuffle ? 1u : 0u,
+                              profile().has_broken_spirv_software_mma_shuffle ? 1u : 0u, (uint32_t)dev.sg32_stages,
                               getenv("RX_VK_WARP64") ? 1u : 0u,
                               // (and where the translation starts a storage binding: offsets are counted from there, so a cache
                               // made on a 16-aligned GPU is no use on a 64-aligned one in the same folder, a laptop's two GPUs)

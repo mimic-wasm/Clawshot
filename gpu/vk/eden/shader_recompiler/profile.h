@@ -108,6 +108,7 @@ struct Profile {
     /// Some drivers have broken support for OpVectorExtractDynamic on subgroup mask inputs
     bool has_broken_spirv_subgroup_mask_vector_extract_dynamic{};
     bool has_broken_spirv_subgroup_shuffle{};
+    bool has_broken_spirv_software_mma_shuffle{};  // (hookshot-amd) software HMMA uses broadcasts on the proprietary driver
     bool has_broken_spirv_fragment_shuffle{};   // (Lichii #273: AMD's proprietary driver, fragment stages only)
     u32 max_subgroup_size{};
 

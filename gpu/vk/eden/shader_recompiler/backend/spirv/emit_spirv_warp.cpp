@@ -385,11 +385,12 @@ Id EmitDPdyCoarse(EmitContext& ctx, Id op_a) {
 void DefineSoftwareMatrixFunction(EmitContext& ctx) {
     {
         constexpr bool variant = true;
+        const bool broadcast_shuffle = ctx.profile.has_broken_spirv_subgroup_shuffle ||
+                                       ctx.profile.has_broken_spirv_software_mma_shuffle;
         ctx.AddCapability(spv::Capability::GroupNonUniform);
-        ctx.AddCapability(spv::Capability::GroupNonUniformShuffle);
-        if (!ctx.profile.SupportsSubgroupStage(ctx.stage) ||
-            ctx.profile.has_broken_spirv_subgroup_shuffle)
-            throw NotImplementedException("Software HMMA requires subgroup shuffle support");
+        if (!broadcast_shuffle) ctx.AddCapability(spv::Capability::GroupNonUniformShuffle);
+        if (!ctx.profile.SupportsSubgroupStage(ctx.stage))
+            throw NotImplementedException("Software HMMA requires subgroup support");
         const Id u32ty = ctx.U32[1], f32ty = ctx.F32[1];
         const auto imm = [&](u32 v) { return ctx.Const(v); };
         const auto add = [&](Id a, Id b) { return ctx.OpIAdd(u32ty, a, b); };
@@ -459,12 +460,11 @@ void DefineSoftwareMatrixFunction(EmitContext& ctx) {
         const Id b = ctx.OpSelect(u32ty, upper, inputs[5], inputs[4]);
         std::array<Id, 2> bs;
         for (u32 col = 0; col < 2; ++col)
-            bs[col] = unpack(ctx.OpGroupNonUniformShuffle(u32ty, imm(3), b,
-                                                          add(b_lane, imm(col * 4))));
+            bs[col] = unpack(ShuffleAbsolute(ctx, b, add(b_lane, imm(col * 4)), broadcast_shuffle));
         const Id round_now = ctx.OpIEqual(ctx.U1, component, imm(3));
         for (u32 row = 0; row < 2; ++row) {
             const Id a = ctx.OpSelect(u32ty, upper, inputs[row + 2], inputs[row]);
-            const Id as = unpack(ctx.OpGroupNonUniformShuffle(u32ty, imm(3), a, a_lane));
+            const Id as = unpack(ShuffleAbsolute(ctx, a, a_lane, broadcast_shuffle));
             for (u32 col = 0; col < 2; ++col) {
                 Id value = ctx.OpLoad(f32ty, accumulators[row * 2 + col]);
                 for (u32 half = 0; half < 2; ++half) {
